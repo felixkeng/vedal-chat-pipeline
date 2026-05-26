@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vedal Chat Pipeline</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: 'Courier New', monospace;
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid #30363d;
+    padding-bottom: 16px;
+  }
+  header h1 { font-size: 18px; color: #58a6ff; }
+  #status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #238636;
+    color: #fff;
+  }
+  #last-update { font-size: 11px; color: #484f58; margin-left: auto; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .card .label {
+    font-size: 10px;
+    color: #484f58;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .card .value {
+    font-size: 28px;
+    color: #e6edf3;
+  }
+
+  .card .sub { font-size: 11px; color: #8b949e; margin-top: 4px; }
+
+  .card.hype .value { color: #f85149; }
+  .card.active .value { color: #3fb950; }
+  .card.quiet .value { color: #484f58; }
+
+  /* ── Bottom grid ── */
+  .bottom {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .panel h2 {
+    font-size: 11px;
+    color: #484f58;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+
+  /* ── Top words ── */
+  .word-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    margin-bottom: 6px;
+    align-items: center;
+    font-size: 12px;
+  }
+
+  .word-bar-wrap {
+    background: #0d1117;
+    border-radius: 2px;
+    height: 6px;
+    margin-top: 3px;
+  }
+
+  .word-bar {
+    background: #58a6ff;
+    height: 6px;
+    border-radius: 2px;
+    transition: width 0.5s;
+  }
+
+  .word-count { color: #484f58; font-size: 11px; }
+
+  /* ── Messages per minute ── */
+  .mpm-row {
+    display: grid;
+    grid-template-columns: 80px 1fr auto;
+    gap: 8px;
+    margin-bottom: 5px;
+    align-items: center;
+    font-size: 11px;
+  }
+
+  .mpm-time { color: #484f58; }
+
+  .mpm-bar-wrap {
+    background: #0d1117;
+    border-radius: 2px;
+    height: 14px;
+  }
+
+  .mpm-bar {
+    background: #238636;
+    height: 14px;
+    border-radius: 2px;
+    transition: width 0.5s;
+  }
+
+  .mpm-bar.high { background: #f85149; }
+  .mpm-bar.med  { background: #d29922; }
+
+  .mpm-count { color: #8b949e; min-width: 30px; text-align: right; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Vedal Chat Pipeline</h1>
+  <span id="status">CONNECTING...</span>
+  <span id="last-update"></span>
+</header>
+
+<!-- Stat cards -->
+<div class="grid">
+  <div class="card">
+    <div class="label">Total Messages</div>
+    <div class="value" id="total-msgs">—</div>
+    <div class="sub" id="since">since —</div>
+  </div>
+  <div class="card">
+    <div class="label">Unique Chatters</div>
+    <div class="value" id="unique-chatters">—</div>
+  </div>
+  <div class="card">
+    <div class="label">Sub Ratio</div>
+    <div class="value" id="sub-ratio">—</div>
+    <div class="sub" id="sub-count">— sub messages</div>
+  </div>
+  <div class="card" id="hype-card">
+    <div class="label">Hype Score</div>
+    <div class="value" id="hype-score">—</div>
+    <div class="sub" id="hype-status">—</div>
+  </div>
+</div>
+
+<!-- Bottom panels -->
+<div class="bottom">
+  <div class="panel">
+    <h2>Top Words — Last 5 Minutes</h2>
+    <div id="words"></div>
+  </div>
+  <div class="panel">
+    <h2>Messages Per Minute</h2>
+    <div id="mpm"></div>
+  </div>
+</div>
+
+<script>
+  const ws = new WebSocket(`ws://${location.host}/ws/dashboard`)
+
+  ws.onopen = () => {
+    document.getElementById('status').textContent = 'LIVE'
+    document.getElementById('status').style.background = '#238636'
+  }
+
+  ws.onclose = () => {
+    document.getElementById('status').textContent = 'DISCONNECTED'
+    document.getElementById('status').style.background = '#da3633'
+  }
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data)
+    document.getElementById('last-update').textContent =
+      'Updated ' + new Date().toLocaleTimeString()
+    renderAll(data)
+  }
+
+  function renderAll(data) {
+    // ── Stat cards ────────────────────────
+    document.getElementById('total-msgs').textContent =
+      data.total.total_messages?.toLocaleString() ?? '—'
+    document.getElementById('unique-chatters').textContent =
+      data.total.unique_chatters?.toLocaleString() ?? '—'
+    document.getElementById('since').textContent =
+      'since ' + (data.total.since?.slice(11,19) ?? '—')
+
+    document.getElementById('sub-ratio').textContent =
+      (data.subs.sub_ratio ?? '—') + '%'
+    document.getElementById('sub-count').textContent =
+      (data.subs.sub_messages ?? '—') + ' sub messages'
+
+    const hype = data.hype
+    document.getElementById('hype-score').textContent = hype.hype_score ?? '—'
+    document.getElementById('hype-status').textContent = hype.status ?? '—'
+    const card = document.getElementById('hype-card')
+    card.className = 'card ' + (
+      hype.hype_score > 2 ? 'hype' : hype.hype_score > 1.2 ? 'active' : 'quiet'
+    )
+
+    // ── Top words ─────────────────────────
+    const wordsEl = document.getElementById('words')
+    wordsEl.innerHTML = ''
+    const maxCount = data.words[0]?.count || 1
+    for (const w of data.words) {
+      const pct = Math.round(w.count / maxCount * 100)
+      wordsEl.innerHTML += `
+        <div class="word-row">
+          <div>
+            <div>${w.word}</div>
+            <div class="word-bar-wrap">
+              <div class="word-bar" style="width:${pct}%"></div>
+            </div>
+          </div>
+          <div class="word-count">${w.count}</div>
+        </div>`
+    }
+
+    // ── Messages per minute ───────────────
+    const mpmEl = document.getElementById('mpm')
+    mpmEl.innerHTML = ''
+    const maxMpm = Math.max(...data.mpm.map(r => r.message_count), 1)
+    for (const row of data.mpm) {
+      const pct = Math.round(row.message_count / maxMpm * 100)
+      const cls = row.message_count > maxMpm * 0.8 ? 'high'
+                : row.message_count > maxMpm * 0.5 ? 'med' : ''
+      const time = row.minute?.slice(11, 16) ?? ''
+      mpmEl.innerHTML += `
+        <div class="mpm-row">
+          <div class="mpm-time">${time}</div>
+          <div class="mpm-bar-wrap">
+            <div class="mpm-bar ${cls}" style="width:${pct}%"></div>
+          </div>
+          <div class="mpm-count">${row.message_count}</div>
+        </div>`
+    }
+  }
+</script>
+</body>
+</html>
